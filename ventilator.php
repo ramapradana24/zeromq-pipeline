@@ -1,26 +1,51 @@
 <?php
 
-$maxRowPerWorker = 20;
-
+$maxRowPerWorker = 50;
 include('db.php');
 $context = new ZMQContext();
 
 //  Socket to send messages on
 $sender = new ZMQSocket($context, ZMQ::SOCKET_PUSH);
 $sender->bind("tcp://*:5557");
+
+$pull = new ZMQSocket($context, ZMQ::SOCKET_PULL);
+$pull->bind('tcp://*:5559');
+
+$server = new ZMQSocket($context, ZMQ::SOCKET_PUSH);
+$server->connect("tcp://localhost:5558");
+
+$startTime = 0;
+$endTime = 0;
+
+
 while(true){
-    $query = "SELECT * FROM tb_log WHERE status = 0 ORDER BY created_at ASC LIMIT 130";
+    $query = "SELECT * FROM tb_log WHERE status = 0 ORDER BY created_at";
     $result = $conn->query($query);
 
     $rowCount = mysqli_num_rows($result);
     if($rowCount > 0){
+        
+        $startTime = microtime(true);
+
         $targetProcess = round($rowCount/$maxRowPerWorker);
         echo 'worker: ' . $targetProcess, PHP_EOL;
         manageWorker($targetProcess);
+        // manageWorker(1);
+
+        $order = 1;
         while($row = $result->fetch_assoc()){
             // echo $row['id'] . " ";
 
-            $sender->send($row['query']);
+            $packet = [
+                'order' => $order,
+                'total' => $rowCount,
+                'type'  => $row['type'],
+                'msg'   => $row['query'],
+                'created_at'    => $row['created_at']
+            ];
+
+            $sender->send(json_encode($packet));
+
             $updateQuery = "UPDATE tb_log SET status = 1 WHERE id = " . $row['id'];
             if($conn->query($updateQuery)){
                 // echo "OK!", PHP_EOL;
@@ -28,10 +53,24 @@ while(true){
             else{
                 // echo "ERROR!", PHP_EOL;
             }
+            $order++;
         }
+        
     }else{
         #destroy all worker
+        $endTime = microtime(true);
+
+        $packet = [
+            'order' => 0,
+            'msg'   => ""
+        ];
+        
+        $sender->send(json_encode($packet));
+
+        echo "START TIME: " . $startTime, PHP_EOL;
+        echo 'Timelapse: ' . (($endTime - $startTime) * 1000), PHP_EOL;
         manageWorker(0);
+        exit;
         sleep(1);
     }
     // exit;

@@ -22,22 +22,35 @@ $context = new ZMQContext();
 $receiver = new ZMQSocket($context, ZMQ::SOCKET_PULL);
 $receiver->bind("tcp://*:5558");
 
-$total = 0;
+$sender = new ZMQSocket($context, ZMQ::SOCKET_PUSH);
+$sender->connect("tcp://localhost:5559");
+
+$startTime = 0;
+$endTime = 0;
+
 
 while(true){
-    $query = $receiver->recv();
-    // echo $query, PHP_EOL;
-    $tstart = microtime(true);
-    if($conn->query($query)){
-        echo 'OK!', PHP_EOL;
-    }else{
-        echo 'ERROR!!', PHP_EOL;
+    $packet = json_decode($receiver->recv());
+    
+    # initialize start time
+    if($packet->order == 1){
+        $startTime = microtime(true);
     }
-    $tend = microtime(true);
-    $timelapse = ($tend - $tstart) * 1000;
-    $total += $timelapse;
+    # last packet is received, calculate time
+    else if($packet->order == 0){
+        $endTime = microtime(true);
+        echo $endTime, PHP_EOL;
+        echo $startTime, PHP_EOL;
+        echo "timelapse: " . (($endTime - $startTime) * 1000);
+        exit;
+    }
 
-    printf ("Total elapsed time: %d msec", $total);
+    echo 'OK!', PHP_EOL;
+    // if($conn->query($packet->msg)){
+    //     echo 'OK!', PHP_EOL;
+    // }else{
+    //     echo 'ERROR!!', PHP_EOL;
+    // }
 }
 
 
