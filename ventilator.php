@@ -1,5 +1,11 @@
 <?php
 
+#TO DO
+# 1. membuat engine dapat membalas paket missing dari client
+
+// manageWorker(0);
+// exit;
+
 $maxRowPerWorker = 50;
 include('db.php');
 $context = new ZMQContext();
@@ -17,42 +23,77 @@ $server->connect("tcp://localhost:5558");
 $startTime = 0;
 $endTime = 0;
 
+#send ready check message
+$readyCheckPacket = [
+    'packet_type'   => 1, #packet ready check request
+    'status'        => 0
+];
+#
 
 while(true){
-    $query = "SELECT * FROM tb_log WHERE status = 0 ORDER BY created_at";
+    $query = "SELECT * FROM tb_log WHERE status = 0 ORDER BY id";
     $result = $conn->query($query);
 
     $rowCount = mysqli_num_rows($result);
     if($rowCount > 0){
-        
+        $server->send(json_encode($readyCheckPacket));
+
+        #waiting for client reply
+        $readyCheckReply = json_decode($pull->recv());
+
         $startTime = microtime(true);
 
-        $targetProcess = round($rowCount/$maxRowPerWorker);
+        #initialize how many worker is needed
+        $targetProcess = $rowCount/$maxRowPerWorker;
+        if($targetProcess - (int) $targetProcess > 0) $targetProcess = (int) $targetProcess + 1;
+        
         echo 'worker: ' . $targetProcess, PHP_EOL;
         manageWorker($targetProcess);
-        // manageWorker(1);
+        // manageWorker(0);
+
+        #initialize sending log file to empty
+        // prepareLogFile();
 
         $order = 1;
+        $packetSent = [];
         while($row = $result->fetch_assoc()){
-            // echo $row['id'] . " ";
+            $server->send(json_encode($readyCheckPacket));
 
+            #waiting for client reply
+            $readyCheckReply = json_decode($pull->recv());
             $packet = [
+                'packet_type'   => 2,
                 'order' => $order,
                 'total' => $rowCount,
                 'type'  => $row['type'],
-                'msg'   => $row['query'],
+                'query'   => $row['query'],
+                'old_hash'  => $row['old_hash'],
+                'new_hash'  => $row['new_hash'],
                 'created_at'    => $row['created_at']
             ];
 
-            $sender->send(json_encode($packet));
+            // insertToSendingLog(json_encode($packet));
 
+            $sender->send(json_encode($packet));
+            array_push($packetSent, $packet);
+            echo $order, PHP_EOL;
             $updateQuery = "UPDATE tb_log SET status = 1 WHERE id = " . $row['id'];
             if($conn->query($updateQuery)){
-                // echo "OK!", PHP_EOL;
+                echo $order, PHP_EOL;
             }
             else{
                 // echo "ERROR!", PHP_EOL;
             }
+
+            #if its the last packet, wait for client to send vetification
+            #any missing packet will be resend
+            if($order == $rowCount){
+                echo "stopping...", PHP_EOL;
+                echo $pull->recv();
+                manageWorker(0);
+                exit;
+            }
+
             $order++;
         }
         
@@ -73,7 +114,7 @@ while(true){
         exit;
         sleep(1);
     }
-    // exit;
+    exit;
 }
 
 function manageWorker($targetProcess){
@@ -109,25 +150,13 @@ function manageWorker($targetProcess){
     }
 }
 
+function prepareLogFile(){
+    $logFile = fopen("sending.log", "w");
+    fclose($logFile);
+}
 
-// echo "Press Enter when the workers are ready: ";
-// $fp = fopen('php://stdin', 'r');
-// $line = fgets($fp, 512);
-// fclose($fp);
-// echo "Sending tasks to workers…", PHP_EOL;
-
-// //  The first message is "0" and signals start of batch
-// $sender->send(0);
-
-// //  Send 100 tasks
-// $total_msec = 0;     //  Total expected cost in msecs
-// for ($task_nbr = 0; $task_nbr < 100; $task_nbr++) {
-//     //  Random workload from 1 to 100msecs
-//     $workload = mt_rand(1, 100);
-//     $total_msec += $workload;
-//     $sender->send($workload);
-
-// }
-
-// printf ("Total expected cost: %d msec\n", $total_msec);
-// sleep (1);
+function insertToSendingLog($row){
+    $sendingLog = fopen('sending.log', 'a');
+    fwrite($sendingLog, $row ."\n");
+    fclose($sendingLog);
+}
